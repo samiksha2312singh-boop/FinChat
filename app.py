@@ -7,8 +7,9 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 
 # Custom imports
@@ -48,12 +49,11 @@ if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = 'AAPL'
 
 # ============================================================================
-# ENHANCED STYLING - FIXED TEXT SPACING
+# ENHANCED STYLING
 # ============================================================================
 
 st.markdown("""
 <style>
-    /* Main Header */
     .main-header {
         font-size: 3rem;
         font-weight: bold;
@@ -64,7 +64,6 @@ st.markdown("""
         margin-bottom: 0.5rem;
     }
     
-    /* Subtitle */
     .subtitle {
         text-align: center;
         color: #666;
@@ -72,7 +71,6 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     
-    /* Metric Cards */
     .metric-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1.5rem;
@@ -82,73 +80,21 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
-    /* FIX TEXT SPACING ISSUES */
     .stMarkdown p {
         word-spacing: 0.2em;
         letter-spacing: 0.015em;
         line-height: 1.8;
         word-break: break-word;
-        white-space: pre-wrap;
-        font-size: 1rem;
     }
     
-    .stMarkdown strong {
-        letter-spacing: 0.03em;
-        word-spacing: 0.15em;
-        font-weight: 600;
-    }
-    
-    /* Headers with better spacing */
-    .stMarkdown h2 {
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-        letter-spacing: 0.02em;
-        word-spacing: 0.1em;
-        line-height: 1.4;
-    }
-    
-    .stMarkdown h3 {
+    .stMarkdown h2, .stMarkdown h3 {
         margin-top: 1.5rem;
         margin-bottom: 0.8rem;
-        letter-spacing: 0.02em;
-        word-spacing: 0.1em;
     }
     
-    /* Lists with better spacing */
     .stMarkdown li {
         margin-bottom: 0.8rem;
         line-height: 1.7;
-        word-spacing: 0.15em;
-    }
-    
-    .stMarkdown ul, .stMarkdown ol {
-        padding-left: 1.5rem;
-        margin-bottom: 1rem;
-    }
-    
-    /* Code blocks */
-    .stMarkdown code {
-        padding: 0.2rem 0.4rem;
-        background-color: rgba(240, 242, 246, 0.8);
-        border-radius: 3px;
-        font-family: 'Monaco', monospace;
-    }
-    
-    /* Chat messages - better readability */
-    .stChatMessage {
-        padding: 1rem;
-    }
-    
-    /* Ensure proper text wrapping */
-    .element-container {
-        word-break: break-word;
-        overflow-wrap: break-word;
-    }
-    
-    /* Fix for inline code/bold in verdicts */
-    .stMarkdown p strong {
-        display: inline;
-        margin-right: 0.3em;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -170,17 +116,79 @@ POPULAR_TICKERS = {
     'JNJ': 'Johnson & Johnson',
     'WMT': 'Walmart',
     'PG': 'Procter & Gamble',
+    'NFLX': 'Netflix',
+    'DIS': 'Disney'
 }
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
+def generate_sample_price_history(ticker: str, period: str):
+    """Generate realistic sample price data for demo (when Yahoo Finance is rate limited)"""
+    
+    # Realistic performance patterns for each ticker
+    patterns = {
+        'AAPL': {'trend': 0.12, 'volatility': 0.018, 'base_price': 175},
+        'META': {'trend': 0.35, 'volatility': 0.025, 'base_price': 338},
+        'MSFT': {'trend': 0.18, 'volatility': 0.015, 'base_price': 378},
+        'TSLA': {'trend': 0.08, 'volatility': 0.040, 'base_price': 242},
+        'GOOGL': {'trend': 0.15, 'volatility': 0.020, 'base_price': 139},
+        'NVDA': {'trend': 0.48, 'volatility': 0.035, 'base_price': 487},
+        'AMZN': {'trend': 0.22, 'volatility': 0.022, 'base_price': 145},
+        'NFLX': {'trend': 0.05, 'volatility': 0.028, 'base_price': 385},
+        'DIS': {'trend': -0.02, 'volatility': 0.022, 'base_price': 92}
+    }
+    
+    pattern = patterns.get(ticker, {'trend': 0.10, 'volatility': 0.02, 'base_price': 100})
+    
+    # Determine number of days
+    period_days = {
+        '1mo': 30,
+        '3mo': 90,
+        '6mo': 180,
+        '1y': 365,
+        '2y': 730
+    }
+    days = period_days.get(period, 180)
+    
+    # Generate dates
+    end_date = datetime.now()
+    dates = pd.date_range(end=end_date, periods=days, freq='D')
+    
+    # Generate realistic price movement
+    np.random.seed(hash(ticker) % 10000)  # Consistent for same ticker
+    
+    # Daily returns with trend and volatility
+    daily_returns = np.random.normal(
+        pattern['trend'] / days,    # Average daily return
+        pattern['volatility'],       # Daily volatility
+        days
+    )
+    
+    # Add some autocorrelation (realistic market behavior)
+    for i in range(1, len(daily_returns)):
+        daily_returns[i] += daily_returns[i-1] * 0.1
+    
+    # Calculate prices
+    cumulative_returns = (1 + daily_returns).cumprod()
+    prices = pattern['base_price'] * cumulative_returns
+    
+    # Create DataFrame
+    df = pd.DataFrame({
+        'Close': prices,
+        'Open': prices * (1 + np.random.normal(0, 0.002, days)),
+        'High': prices * (1 + abs(np.random.normal(0, 0.005, days))),
+        'Low': prices * (1 - abs(np.random.normal(0, 0.005, days))),
+    }, index=dates)
+    
+    return df
+
+
 def extract_filing_sections(text: str) -> dict:
     """Extract key sections from SEC filing text"""
     sections = {}
     
-    # Risk Factors
     risk_patterns = [
         r"RISK\s+FACTORS.*?(?=ITEM|UNREGISTERED|$)",
         r"ITEM\s+1A\..*?(?=ITEM\s+2|$)"
@@ -191,7 +199,6 @@ def extract_filing_sections(text: str) -> dict:
             sections['Risk Factors'] = match.group(0)[:15000]
             break
     
-    # Management Discussion & Analysis
     mda_patterns = [
         r"MANAGEMENT'?S\s+DISCUSSION\s+AND\s+ANALYSIS.*?(?=QUANTITATIVE|ITEM\s+3|$)",
         r"MD&A.*?(?=ITEM\s+3|$)"
@@ -202,7 +209,6 @@ def extract_filing_sections(text: str) -> dict:
             sections['Management Discussion & Analysis'] = match.group(0)[:15000]
             break
     
-    # Financial Statements
     financial_patterns = [
         r"CONSOLIDATED\s+(?:BALANCE\s+SHEETS?|STATEMENTS?).*?(?=NOTES|ITEM|$)",
         r"FINANCIAL\s+STATEMENTS.*?(?=NOTES|$)"
@@ -347,18 +353,16 @@ with st.sidebar:
             'portfolio_allocation': portfolio_allocation
         }
         
-        st.caption(f"🎯 Current: {risk_tolerance} | {investment_horizon} | {portfolio_allocation}%")
+        st.caption(f"🎯 {risk_tolerance} | {investment_horizon} | {portfolio_allocation}%")
     
     st.divider()
     
-    # Session Stats
     st.caption("**📊 Session Stats:**")
     st.caption(f"💬 Queries: {len(st.session_state.messages) // 2}")
     st.caption(f"📄 Filings: {len(st.session_state.uploaded_filings)}")
     
     st.divider()
     
-    # Tech Stack
     st.caption("**🔥 Powered by:**")
     st.caption("• Llama 3.1 70B (Fireworks)")
     st.caption("• LangChain Multi-Agent")
@@ -366,7 +370,6 @@ with st.sidebar:
     
     st.divider()
     
-    # Clear chat button
     if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
@@ -389,7 +392,7 @@ with tab1:
     ticker = st.session_state.current_ticker
     company_name = POPULAR_TICKERS.get(ticker, ticker)
     
-    # Company Header
+    # Header
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
         st.metric("Company", f"{ticker} - {company_name}")
@@ -411,17 +414,17 @@ with tab1:
             if st.button(f"Should I invest in {ticker}?", key="ex1"):
                 st.session_state.example_query = f"Should I invest in {ticker}?"
                 st.rerun()
-            if st.button(f"What are good entry prices for {ticker}?", key="ex2"):
-                st.session_state.example_query = f"What are good entry prices for {ticker}?"
+            if st.button(f"Is {ticker} a good buy?", key="ex2"):
+                st.session_state.example_query = f"Is {ticker} a good buy for a conservative investor?"
                 st.rerun()
         
         with example_col2:
             st.markdown("**Analysis:**")
-            if st.button(f"What are the main risks for {ticker}?", key="ex3"):
+            if st.button(f"What are risks for {ticker}?", key="ex3"):
                 st.session_state.example_query = f"What are the main risks for {ticker}?"
                 st.rerun()
-            if st.button(f"Compare {ticker} to its competitors", key="ex4"):
-                st.session_state.example_query = f"Compare {ticker} to its competitors"
+            if st.button(f"Compare to competitors", key="ex4"):
+                st.session_state.example_query = f"Is {ticker} better than its competitors?"
                 st.rerun()
     
     # Display chat history
@@ -431,40 +434,35 @@ with tab1:
             if message["role"] == "assistant":
                 st.caption("🔥 Llama 3.1 70B (Fireworks AI)")
     
-    # Chat input - handle both manual input and example queries
+    # Chat input
     chat_input_value = st.session_state.pop('example_query', '')
     
     if prompt := (chat_input_value or st.chat_input(f"Ask about {ticker}'s financial performance, risks, or investment potential...")):
         
-        # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Generate response
         with st.chat_message("assistant"):
             try:
-                # Initialize orchestrator
                 orchestrator = FinancialAgentOrchestrator(
                     ticker=ticker,
                     portfolio_config=st.session_state.portfolio_config
                 )
                 
-                # Get multi-agent response
                 answer = orchestrator.route_query(prompt)
                 
                 st.markdown(answer)
                 st.caption("🔥 Llama 3.1 70B (Fireworks AI)")
                 
-                # Add to history
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": answer
                 })
                 
             except Exception as e:
-                error_msg = f"⚠️ **Error:** {str(e)}\n\nPlease check your API keys in `.streamlit/secrets.toml`"
+                error_msg = f"⚠️ **Error:** {str(e)}"
                 st.error(error_msg)
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -472,7 +470,7 @@ with tab1:
                 })
 
 # ============================================================================
-# TAB 2: QUICK METRICS
+# TAB 2: QUICK METRICS + MULTI-STOCK COMPARISON
 # ============================================================================
 
 with tab2:
@@ -486,7 +484,7 @@ with tab2:
         metrics = json.loads(metrics_json)
         
         if 'error' not in metrics:
-            # Display data source
+            # Data source indicator
             if 'data_source' in metrics:
                 st.info(f"📊 {metrics['data_source']}")
             elif 'note' in metrics:
@@ -535,7 +533,7 @@ with tab2:
             
             st.divider()
             
-            # Detailed metrics tables
+            # Detailed metrics
             col1, col2 = st.columns(2)
             
             with col1:
@@ -568,58 +566,132 @@ with tab2:
             
             st.divider()
             
-            # Price chart
-            st.subheader("📈 6-Month Price Chart")
+            # ============================================================================
+            # MULTI-STOCK COMPARISON CHART WITH SAMPLE DATA
+            # ============================================================================
             
-            try:
-                stock = yf.Ticker(ticker)
-                hist = stock.history(period="6mo")
+            st.subheader("🏆 Multi-Stock Performance Comparison")
+            st.caption("Compare price trends across multiple stocks (normalized to % change)")
+            
+            # Stock selector
+            default_compare = [ticker]
+            if ticker == 'META':
+                default_compare.extend(['GOOGL', 'NFLX'])
+            elif ticker == 'TSLA':
+                default_compare.extend(['NVDA', 'AMZN'])
+            else:
+                default_compare.extend(['MSFT', 'GOOGL'])
+            
+            compare_tickers = st.multiselect(
+                "Select stocks to compare:",
+                options=list(POPULAR_TICKERS.keys()),
+                default=default_compare[:3],
+                help="Choose 2-5 stocks to overlay"
+            )
+            
+            # Time period
+            comp_period = st.selectbox(
+                "Period:",
+                options=['1mo', '3mo', '6mo', '1y', '2y'],
+                index=2,
+                key='comp_period'
+            )
+            
+            if len(compare_tickers) >= 2:
+                st.info("📊 Using demo data (Yahoo Finance rate limited - realistic patterns for testing)")
                 
-                if not hist.empty:
-                    fig = go.Figure()
+                try:
+                    fig_multi = go.Figure()
+                    colors = ['#FF6B35', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880']
+                    performance_data = []
                     
-                    fig.add_trace(go.Scatter(
-                        x=hist.index, 
-                        y=hist['Close'],
-                        mode='lines',
-                        name='Price',
-                        line=dict(color='#FF6B35', width=2),
-                        hovertemplate='$%{y:.2f}<extra></extra>'
-                    ))
+                    for i, comp_ticker in enumerate(compare_tickers):
+                        # Try real data first, fall back to sample
+                        try:
+                            stock = yf.Ticker(comp_ticker)
+                            hist = stock.history(period=comp_period)
+                            
+                            if hist.empty or len(hist) < 5:
+                                raise Exception("Use sample")
+                            
+                            # Use real data if available
+                            use_sample = False
+                        except:
+                            # Use sample data
+                            use_sample = True
+                            hist = generate_sample_price_history(comp_ticker, comp_period)
+                        
+                        if not hist.empty:
+                            # Normalize to % change
+                            start_price = hist['Close'].iloc[0]
+                            normalized = ((hist['Close'] / start_price) - 1) * 100
+                            
+                            fig_multi.add_trace(go.Scatter(
+                                x=hist.index,
+                                y=normalized,
+                                mode='lines',
+                                name=f'{comp_ticker}' + (' (Demo)' if use_sample else ''),
+                                line=dict(color=colors[i % len(colors)], width=2.5),
+                                hovertemplate=f'{comp_ticker}: %{{y:.1f}}%<extra></extra>'
+                            ))
+                            
+                            final_change = normalized.iloc[-1]
+                            performance_data.append((comp_ticker, final_change))
                     
-                    # Add 20-day moving average if enough data
-                    if len(hist) >= 20:
-                        hist['MA20'] = hist['Close'].rolling(window=20).mean()
-                        fig.add_trace(go.Scatter(
-                            x=hist.index,
-                            y=hist['MA20'],
-                            mode='lines',
-                            name='20-Day MA',
-                            line=dict(color='#00CC96', width=1, dash='dot')
-                        ))
-                    
-                    fig.update_layout(
-                        yaxis_title='Price ($)',
+                    fig_multi.update_layout(
+                        title=f'Performance Comparison - {comp_period.upper()} (% Change)',
+                        yaxis_title='% Change from Start',
                         xaxis_title='Date',
                         template='plotly_dark',
-                        height=450,
+                        height=500,
                         hovermode='x unified',
-                        showlegend=True
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="center",
+                            x=0.5
+                        )
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.warning("⚠️ Chart data unavailable (Yahoo Finance rate limited)")
+                    # Zero line
+                    fig_multi.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
                     
-            except Exception as chart_error:
-                st.warning(f"⚠️ Unable to load chart: {str(chart_error)}")
+                    st.plotly_chart(fig_multi, use_container_width=True)
+                    
+                    # Performance leaderboard
+                    if performance_data:
+                        st.markdown("#### 🏆 Performance Leaderboard")
+                        performance_data.sort(key=lambda x: x[1], reverse=True)
+                        
+                        cols = st.columns(len(performance_data))
+                        for i, (t, change) in enumerate(performance_data):
+                            with cols[i]:
+                                medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "📊"
+                                st.metric(
+                                    f"{medal} {t}",
+                                    f"{change:+.1f}%",
+                                    delta=f"Rank #{i+1}"
+                                )
+                        
+                        # Insights
+                        best_ticker, best_change = performance_data[0]
+                        worst_ticker, worst_change = performance_data[-1]
+                        spread = best_change - worst_change
+                        
+                        st.caption(f"💡 **{best_ticker}** outperformed **{worst_ticker}** by **{spread:.1f}** pts over {comp_period}")
+                        
+                except Exception as e:
+                    st.error(f"Chart error: {str(e)}")
+            else:
+                st.info("👆 Select at least 2 stocks to compare")
             
         else:
-            st.error(f"⚠️ Unable to fetch data for {ticker}")
-            st.info("💡 Available demo tickers: AAPL, META, MSFT, TSLA, GOOGL, NVDA, AMZN")
+            st.error(f"⚠️ No data for {ticker}")
+            st.info("💡 Available: AAPL, META, MSFT, TSLA, GOOGL, NVDA, AMZN")
             
     except Exception as e:
-        st.error(f"Error loading metrics: {str(e)}")
+        st.error(f"Error: {str(e)}")
 
 # ============================================================================
 # TAB 3: ABOUT
@@ -631,38 +703,27 @@ with tab3:
     st.markdown("""
     ### 🎯 Multi-Agent Financial Analysis System
     
-    **FinChat AI** uses specialized AI agents powered by Llama 3.1 70B to provide 
-    comprehensive stock analysis from multiple perspectives.
+    **FinChat AI** uses specialized AI agents powered by Llama 3.1 70B.
     
     ### 🤖 Specialized Agents
     
-    - **💼 Investment Advisor Agent** - Buy/sell/hold recommendations with specific entry/exit prices
-    - **🛡️ Risk Analysis Agent** - Comprehensive risk assessment from metrics and SEC filings
-    - **📦 Product Analysis Agent** - Business segment and product performance evaluation
-    - **🏆 Peer Comparison Agent** - Competitive positioning analysis vs sector peers
-    - **📊 General Analysis Agent** - Flexible analysis for any financial question
+    - **💼 Investment Advisor** - Buy/sell/hold recommendations
+    - **🛡️ Risk Analyst** - Risk assessment with SEC filings
+    - **📦 Product Analyst** - Segment performance
+    - **🏆 Peer Comparator** - Competitive analysis
+    - **📊 General Analyst** - Flexible analysis
     
-    ### 🔥 Technology Stack
+    ### 🔥 Technology
     
-    - **LLM:** Llama 3.1 70B via Fireworks AI
-    - **Framework:** LangChain Multi-Agent System
+    - **LLM:** Llama 3.1 70B (Fireworks AI)
+    - **Framework:** LangChain Multi-Agent
     - **Embeddings:** OpenAI text-embedding-3-small
-    - **Vector Database:** ChromaDB
+    - **Vector DB:** ChromaDB
     - **Data:** Yahoo Finance + SEC EDGAR
-    - **Interface:** Streamlit
     
-    ### 📊 Key Features
+    ### 👥 Team
     
-    ✅ Multi-agent orchestration for complex queries  
-    ✅ RAG-powered SEC filing analysis  
-    ✅ Real-time market data integration  
-    ✅ Personalized recommendations based on risk profile  
-    ✅ Fast responses (~90% cheaper than GPT-4)  
-    
-    ### 👥 Development Team
-    
-    **IST.688.M001.FALL25 - Building Human-Centered AI Applications**
-    
+    **IST.688.M001.FALL25**
     - Bhushan Jain
     - Samiksha Singh
     - Anjali Kalra
@@ -670,39 +731,31 @@ with tab3:
     
     ### ⚖️ Disclaimer
     
-    This tool provides AI-generated analysis for **educational purposes only**.
-    It does not constitute financial advice. Always consult qualified financial
-    advisors before making investment decisions.
-    
-    **Data Sources:**
-    - Real-time metrics: Yahoo Finance API
-    - SEC filings: User-uploaded documents
-    - Analysis: Llama 3.1 70B via Fireworks AI
+    Educational purposes only. Not financial advice.
     """)
     
     st.divider()
     
-    # Session statistics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Messages", len(st.session_state.messages))
+        st.metric("Messages", len(st.session_state.messages))
     with col2:
-        st.metric("Filings Uploaded", len(st.session_state.uploaded_filings))
+        st.metric("Filings", len(st.session_state.uploaded_filings))
     with col3:
-        st.metric("Active Agents", "5")
+        st.metric("Agents", "5")
     with col4:
         st.metric("Version", "2.0")
     
     st.divider()
     
-    # Export functionality
+    # Export
     if len(st.session_state.messages) > 0:
         export_data = {
             'ticker': st.session_state.current_ticker,
             'timestamp': datetime.now().isoformat(),
             'portfolio_config': st.session_state.portfolio_config,
             'conversation': st.session_state.messages,
-            'filings_uploaded': len(st.session_state.uploaded_filings)
+            'filings': len(st.session_state.uploaded_filings)
         }
         
         st.download_button(
@@ -714,24 +767,17 @@ with tab3:
         )
 
 # ============================================================================
-# SIMPLE FOOTER (NO GRAY BOX!)
+# FOOTER
 # ============================================================================
 
 st.divider()
 
-# Simple text footer
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     st.markdown("""
     <div style='text-align: center;'>
-        <p style='color: #888; font-size: 0.9rem; margin-bottom: 0.3rem;'>
-            <strong>FinChat AI v2.0</strong>
-        </p>
-        <p style='color: #999; font-size: 0.85rem; margin-bottom: 0.3rem;'>
-            Multi-Agent System with Llama 3.1 70B (Fireworks AI) & LangChain
-        </p>
-        <p style='color: #aaa; font-size: 0.8rem;'>
-            IST.688.M001.FALL25 - Building Human-Centered AI Applications
-        </p>
+        <p style='color: #888; font-size: 0.9rem;'><strong>FinChat AI v2.0</strong></p>
+        <p style='color: #999; font-size: 0.85rem;'>Llama 3.1 70B (Fireworks) & LangChain</p>
+        <p style='color: #aaa; font-size: 0.8rem;'>IST.688.M001.FALL25</p>
     </div>
     """, unsafe_allow_html=True)

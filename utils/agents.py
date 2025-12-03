@@ -17,6 +17,21 @@ from utils.tools import (
     calculate_health_score_tool
 )
 
+def extract_tickers_from_query(query: str, current_ticker: str) -> tuple:
+    """Extract ticker symbols mentioned in the query"""
+    
+    all_tickers = ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMZN', 
+                   'JPM', 'V', 'JNJ', 'WMT', 'PG', 'NFLX', 'DIS', 'GM', 'F', 'RIVN']
+    
+    query_upper = query.upper()
+    found_tickers = [t for t in all_tickers if t in query_upper]
+    
+    if len(found_tickers) >= 2:
+        return found_tickers[0], found_tickers[1]
+    elif len(found_tickers) == 1:
+        return found_tickers[0], None
+    else:
+        return current_ticker, None
 
 @st.cache_resource
 def get_llm():
@@ -545,22 +560,175 @@ class PeerComparisonAgent:
     def analyze(self, query: str) -> str:
         """Compare to peers"""
         
+        # Extract tickers from query
+        ticker1, ticker2 = extract_tickers_from_query(query, self.ticker)
+        
+        # If comparing two specific stocks (e.g., "Is META better than GOOGL?")
+        if ticker2:
+            return self.head_to_head_comparison(ticker1, ticker2, query)
+        else:
+            # Sector comparison for single ticker
+            return self.sector_comparison(ticker1, query)
+    
+    def head_to_head_comparison(self, ticker1: str, ticker2: str, query: str) -> str:
+        """Direct comparison between two stocks"""
+        
         with st.status("🏆 Peer Comparison Agent", expanded=True) as status:
-            st.write("🔧 Gathering company metrics...")
-            metrics_json = get_stock_metrics_tool(self.ticker)
+            st.write(f"🔧 Comparing {ticker1} vs {ticker2}...")
             
-            st.write("🏆 Fetching peer comparison data...")
-            comparison_json = get_peer_comparison_tool(self.ticker)
+            metrics1_json = get_stock_metrics_tool(ticker1)
+            metrics2_json = get_stock_metrics_tool(ticker2)
             
-            st.write("🤖 Analyzing competitive position...")
+            try:
+                metrics1 = json.loads(metrics1_json)
+                metrics2 = json.loads(metrics2_json)
+            except:
+                return "⚠️ Error loading data."
+            
+            status.update(label="✅ Comparison Complete", state="complete")
+        
+        # Build head-to-head response
+        response = f"""## 🏆 Head-to-Head: {ticker1} vs {ticker2}
+
+---
+
+### Side-by-Side Metrics
+
+| Metric | {ticker1} | {ticker2} | Winner |
+|--------|----------|----------|--------|
+| **Price** | ${metrics1.get('price', 0)} | ${metrics2.get('price', 0)} | - |
+| **P/E Ratio** | {metrics1.get('pe_ratio', 0)} | {metrics2.get('pe_ratio', 0)} | {'🏆 ' + ticker1 if 0 < metrics1.get('pe_ratio', 999) < metrics2.get('pe_ratio', 999) else '🏆 ' + ticker2} |
+| **Market Cap** | ${metrics1.get('market_cap_b', 0)}B | ${metrics2.get('market_cap_b', 0)}B | {'🏆 ' + ticker1 if metrics1.get('market_cap_b', 0) > metrics2.get('market_cap_b', 0) else '🏆 ' + ticker2} |
+| **Revenue Growth** | {metrics1.get('revenue_growth_pct', 0)}% | {metrics2.get('revenue_growth_pct', 0)}% | {'🏆 ' + ticker1 if metrics1.get('revenue_growth_pct', 0) > metrics2.get('revenue_growth_pct', 0) else '🏆 ' + ticker2} |
+| **Profit Margin** | {metrics1.get('profit_margin_pct', 0)}% | {metrics2.get('profit_margin_pct', 0)}% | {'🏆 ' + ticker1 if metrics1.get('profit_margin_pct', 0) > metrics2.get('profit_margin_pct', 0) else '🏆 ' + ticker2} |
+| **Debt/Equity** | {metrics1.get('debt_to_equity', 0)} | {metrics2.get('debt_to_equity', 0)} | {'🏆 ' + ticker1 if metrics1.get('debt_to_equity', 999) < metrics2.get('debt_to_equity', 999) else '🏆 ' + ticker2} |
+
+---
+
+### Overall Winner
+
+"""
+        
+        # Calculate winner
+        score1 = 0
+        score2 = 0
+        
+        if 0 < metrics1.get('pe_ratio', 999) < metrics2.get('pe_ratio', 999): score1 += 1
+        else: score2 += 1
+        
+        if metrics1.get('profit_margin_pct', 0) > metrics2.get('profit_margin_pct', 0): score1 += 1
+        else: score2 += 1
+        
+        if metrics1.get('revenue_growth_pct', 0) > metrics2.get('revenue_growth_pct', 0): score1 += 1
+        else: score2 += 1
+        
+        if metrics1.get('debt_to_equity', 999) < metrics2.get('debt_to_equity', 999): score1 += 1
+        else: score2 += 1
+        
+        if score1 > score2:
+            response += f"✅ **{ticker1} is the better investment** (wins {score1}/4 metrics)\n\n"
+        elif score2 > score1:
+            response += f"✅ **{ticker2} is the better investment** (wins {score2}/4 metrics)\n\n"
+        else:
+            response += f"🟡 **Too close to call** (tied at {score1}-{score2})\n\n"
+        
+        response += f"**Recommendation:** Based on fundamentals, "
+        if score1 > score2:
+            response += f"prefer {ticker1} over {ticker2}."
+        elif score2 > score1:
+            response += f"prefer {ticker2} over {ticker1}."
+        else:
+            response += "both are similarly positioned - choose based on sector preference."
+        
+        return response
+    
+    
+    def sector_comparison(self, ticker: str, query: str) -> str:
+        """Compare to sector peers (original logic)"""
+        
+        with st.status("🏆 Peer Comparison Agent", expanded=True) as status:
+            st.write(f"🔧 Gathering data for {ticker}...")
+            
+            metrics_json = get_stock_metrics_tool(ticker)
+            comparison_json = get_peer_comparison_tool(ticker)
             
             try:
                 metrics = json.loads(metrics_json)
                 comparison = json.loads(comparison_json)
             except:
-                return "⚠️ Error loading comparison data."
+                return "⚠️ Error loading data."
             
-            status.update(label="✅ Peer Comparison Complete", state="complete")
+            status.update(label="✅ Comparison Complete", state="complete")
+        
+        # [REST OF YOUR CURRENT SECTOR COMPARISON CODE]
+        # Copy the entire sector comparison logic you already have
+        ticker_pe = comparison.get('ticker_pe', 0)
+        sector_pe = comparison.get('sector_avg_pe', 0)
+        ticker_margin = comparison.get('ticker_margin_pct', 0)
+        sector_margin = comparison.get('sector_avg_margin_pct', 0)
+        ticker_growth = comparison.get('ticker_growth_pct', 0)
+        sector_growth = comparison.get('sector_avg_growth_pct', 0)
+        
+        response = f"""## 🏆 Competitive Analysis for {ticker}
+
+**Sector:** {comparison.get('sector', 'Unknown')}  
+**Comparing to:** {', '.join([p['ticker'] for p in comparison.get('peers', [])[:4]])}
+
+---
+
+### Valuation Comparison
+
+"""
+        
+        if ticker_pe > 0 and sector_pe > 0:
+            pe_diff = round(((ticker_pe - sector_pe) / sector_pe * 100), 1)
+            if pe_diff > 15:
+                response += f"🔴 **Premium Valuation:** {ticker}'s P/E of {ticker_pe} is {abs(pe_diff)}% ABOVE sector average of {sector_pe}\n\n"
+            elif pe_diff > -15:
+                response += f"🟡 **Market Valuation:** {ticker}'s P/E of {ticker_pe} is roughly in line with sector average of {sector_pe}\n\n"
+            else:
+                response += f"🟢 **Discount Valuation:** {ticker}'s P/E of {ticker_pe} is {abs(pe_diff)}% BELOW sector average of {sector_pe}\n\n"
+        
+        response += "### Profitability Comparison\n\n"
+        
+        if ticker_margin > sector_margin:
+            margin_diff = round(ticker_margin - sector_margin, 1)
+            response += f"🟢 **Above Average:** {ticker}'s {ticker_margin}% margin exceeds sector of {sector_margin}% by {margin_diff} pts\n\n"
+        else:
+            margin_diff = round(sector_margin - ticker_margin, 1)
+            response += f"🔴 **Below Average:** {ticker}'s {ticker_margin}% margin trails sector of {sector_margin}% by {margin_diff} pts\n\n"
+        
+        response += "### Growth Comparison\n\n"
+        
+        if ticker_growth > sector_growth:
+            response += f"🟢 **Faster Growth:** {ticker} at {ticker_growth}% vs sector {sector_growth}%\n\n"
+        else:
+            response += f"🔴 **Slower Growth:** {ticker} at {ticker_growth}% vs sector {sector_growth}%\n\n"
+        
+        response += "---\n\n### Detailed Peer Metrics\n\n"
+        
+        if comparison.get('peers'):
+            response += "| Ticker | P/E | Profit Margin | Revenue Growth |\n|--------|-----|---------------|----------------|\n"
+            for peer in comparison['peers'][:4]:
+                response += f"| {peer['ticker']} | {peer.get('pe', 'N/A')} | {peer.get('profit_margin_pct', 'N/A')}% | {peer.get('revenue_growth_pct', 'N/A')}% |\n"
+            response += f"| **{ticker}** | **{ticker_pe}** | **{ticker_margin}%** | **{ticker_growth}%** |\n"
+            response += f"| *Sector Avg* | *{sector_pe}* | *{sector_margin}%* | *{sector_growth}%* |\n\n"
+        
+        response += "---\n\n### Investment Verdict\n\n"
+        
+        beats_valuation = ticker_pe < sector_pe if ticker_pe > 0 and sector_pe > 0 else False
+        beats_profitability = ticker_margin > sector_margin
+        beats_growth = ticker_growth > sector_growth
+        wins = sum([beats_valuation, beats_profitability, beats_growth])
+        
+        if wins >= 2:
+            response += f"✅ **Strong Position:** {ticker} outperforms on {wins}/3 metrics."
+        elif wins == 1:
+            response += f"🟡 **Mixed Position:** {ticker} competitive on some metrics."
+        else:
+            response += f"🔴 **Weak Position:** {ticker} underperforms peers."
+        
+        return response
         
         # BUILD RESPONSE
         ticker_pe = comparison.get('ticker_pe', 0)
