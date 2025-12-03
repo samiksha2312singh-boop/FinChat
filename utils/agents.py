@@ -328,14 +328,18 @@ class RiskAnalysisAgent:
             st.write("🔧 Gathering financial metrics...")
             metrics_json = get_stock_metrics_tool(self.ticker)
             
+            st.write("🎯 Calculating risk thresholds...")
+            targets_json = calculate_price_targets_tool(self.ticker, self.portfolio_config['risk_tolerance'])  # ADD THIS LINE
+            
             st.write("📄 Extracting SEC filing risks...")
             filing_risks = search_sec_filing_tool(self.ticker, "risk factors threats concerns regulatory operational financial")
             
             st.write("🤖 Analyzing risk profile...")
             
-            # Parse metrics
+            # Parse metrics AND targets
             try:
                 metrics = json.loads(metrics_json)
+                targets = json.loads(targets_json)  # ADD THIS LINE
             except:
                 return "⚠️ Error loading metrics data."
             
@@ -431,6 +435,7 @@ For now, risk assessment is based on financial metrics only.
 2. **Stop Loss:** Set at ${targets.get('stop_loss', 0)} to limit downside to -8%
 3. **Diversification:** Balance with {'lower-beta stocks' if beta > 1.2 else 'other sectors'} to reduce portfolio volatility
 4. **Monitoring:** Review quarterly earnings and SEC filing updates for emerging risks
+5. **Horizon Alignment:** {self.portfolio_config['investment_horizon']} hold allows riding through volatility
 
 ---
 
@@ -438,7 +443,6 @@ For now, risk assessment is based on financial metrics only.
 """
         
         return response
-
 
 class ProductAnalysisAgent:
     """Product/segment analysis with SEC filing extraction"""
