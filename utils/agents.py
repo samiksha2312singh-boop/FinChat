@@ -1,7 +1,7 @@
 """
 Multi-Agent System using Fireworks Llama 3.1 70B
 Each agent specializes in a specific type of financial analysis
-REVISED: Clean, professional formatting
+REVISED: Question-aware responses, proper variation
 """
 
 import streamlit as st
@@ -24,7 +24,7 @@ def get_llm():
     llm = ChatFireworks(
         model="accounts/fireworks/models/llama-v3p3-70b-instruct",
         api_key=st.secrets["FIREWORKS_API_KEY"],
-        temperature=0.3,
+        temperature=0.7,  # Increased for more natural variation
         max_tokens=1024
     )
     return llm
@@ -42,9 +42,9 @@ class FinancialAgentOrchestrator:
         """Classify user query"""
         query_lower = query.lower()
         
-        investment_keywords = ['invest', 'buy', 'sell', 'hold', 'price target', 'should i', 'entry', 'exit']
-        risk_keywords = ['risk', 'danger', 'concern', 'threat', 'safe', 'risky', 'worry']
-        product_keywords = ['product', 'segment', 'business', 'revenue', 'sales', 'performing']
+        investment_keywords = ['invest', 'buy', 'sell', 'hold', 'price target', 'should i', 'entry', 'exit', 'good buy']
+        risk_keywords = ['risk', 'danger', 'concern', 'threat', 'safe', 'risky', 'worry', 'worried']
+        product_keywords = ['product', 'segment', 'business', 'revenue', 'sales', 'performing', 'advertising']
         comparison_keywords = ['compare', 'competitor', 'peer', 'vs', 'versus', 'better than']
         
         if any(word in query_lower for word in investment_keywords):
@@ -75,7 +75,7 @@ class FinancialAgentOrchestrator:
 
 
 class InvestmentAdvisorAgent:
-    """Investment decisions with clean, structured output"""
+    """Investment decisions with question-aware responses"""
     
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
         self.ticker = ticker
@@ -83,7 +83,7 @@ class InvestmentAdvisorAgent:
         self.llm = llm
     
     def analyze(self, query: str) -> str:
-        """Provide investment recommendation"""
+        """Provide investment recommendation tailored to specific question"""
         
         with st.status("💼 Investment Advisor Agent", expanded=True) as status:
             st.write("🔧 Gathering financial metrics...")
@@ -96,7 +96,7 @@ class InvestmentAdvisorAgent:
             health_json = calculate_health_score_tool(self.ticker)
             
             st.write("📄 Checking SEC filing...")
-            risks = search_sec_filing_tool(self.ticker, "risks concerns")
+            filing_risks = search_sec_filing_tool(self.ticker, "risks concerns")
             
             st.write("🤖 Generating recommendation...")
             
@@ -108,18 +108,48 @@ class InvestmentAdvisorAgent:
             except:
                 return "⚠️ Error parsing financial data. Please try again."
             
-            # Get LLM verdict (just the decision + one sentence)
-            verdict_prompt = f"""You are a financial advisor. Based on this data for {self.ticker}:
+            # QUESTION-AWARE VERDICT - Different prompts for different questions
+            query_lower = query.lower()
+            
+            if 'conservative' in query_lower:
+                verdict_prompt = f"""You are advising a CONSERVATIVE investor about {self.ticker}.
+
+Current Price: ${targets.get('current_price', 0)}
+Conservative Entry: ${targets.get('conservative_entry', 0)}
+Health Score: {health.get('score', 0)}/100
+Debt/Equity: {metrics.get('debt_to_equity', 0)}
+Beta: {metrics.get('beta', 0)}
+
+Question: {query}
+
+Focus on safety and downside protection. Provide: "[BUY/HOLD/WAIT] - [emphasize risk factors and safety]"
+"""
+            elif 'entry price' in query_lower or 'entry point' in query_lower:
+                verdict_prompt = f"""You are advising on the BEST ENTRY PRICE for {self.ticker}.
 
 Current Price: ${targets.get('current_price', 0)}
 Fair Value: ${targets.get('fair_value', 0)}
+Moderate Entry: ${targets.get('moderate_entry', 0)}
+Conservative Entry: ${targets.get('conservative_entry', 0)}
+
+Question: {query}
+
+Focus on optimal entry timing and price levels. Provide: "[BUY/HOLD/WAIT] - [emphasize entry price strategy]"
+"""
+            else:
+                verdict_prompt = f"""You are a financial advisor answering: "{query}"
+
+Data for {self.ticker}:
+Current Price: ${targets.get('current_price', 0)}
+Fair Value: ${targets.get('fair_value', 0)}
+Upside: {targets.get('upside_percent', 0)}%
 Health Score: {health.get('score', 0)}/100
 Revenue Growth: {metrics.get('revenue_growth_pct', 0)}%
 Profit Margin: {metrics.get('profit_margin_pct', 0)}%
 
-Provide ONLY: "[BUY/HOLD/WAIT] - [one clear sentence why]"
+Answer SPECIFICALLY: "{query}"
 
-Be concise. Example: "BUY - Strong fundamentals with 55% upside to fair value justify entry at current levels."
+Provide: "[BUY/HOLD/WAIT] - [tailor explanation to their specific question]"
 """
             
             verdict_response = self.llm.invoke(verdict_prompt)
@@ -134,7 +164,7 @@ Be concise. Example: "BUY - Strong fundamentals with 55% upside to fair value ju
         health_score = health.get('score', 0)
         health_rating = health.get('rating', 'N/A')
         
-        # Determine recommendation color
+        # Determine recommendation emoji
         if 'BUY' in verdict.upper():
             verdict_emoji = "✅"
         elif 'WAIT' in verdict.upper():
@@ -142,9 +172,20 @@ Be concise. Example: "BUY - Strong fundamentals with 55% upside to fair value ju
         else:
             verdict_emoji = "🔄"
         
+        # QUESTION-SPECIFIC INTRO
+        query_lower = query.lower()
+        if 'conservative' in query_lower:
+            intro = f"**For Conservative Investors:**\n\n"
+        elif 'aggressive' in query_lower:
+            intro = f"**For Aggressive Investors:**\n\n"
+        elif 'entry' in query_lower:
+            intro = f"**Entry Price Analysis:**\n\n"
+        else:
+            intro = ""
+        
         response = f"""## {verdict_emoji} Investment Recommendation for {self.ticker}
 
-**{verdict}**
+{intro}**{verdict}**
 
 ---
 
@@ -163,21 +204,21 @@ Be concise. Example: "BUY - Strong fundamentals with 55% upside to fair value ju
 
 """
         
-        # Entry strategy based on risk tolerance
+        # HIGHLIGHT based on risk tolerance
         if self.portfolio_config['risk_tolerance'] == 'Conservative':
-            response += f"""- **Conservative Entry:** ${targets.get('conservative_entry', 0)} (recommended for you)
-- **Moderate Entry:** ${targets.get('moderate_entry', 0)}
-- **Aggressive Entry:** ${targets.get('aggressive_entry', 0)}
+            response += f"""- **🎯 Conservative Entry:** ${targets.get('conservative_entry', 0)} **(recommended for you)**
+- Moderate Entry: ${targets.get('moderate_entry', 0)}
+- Aggressive Entry: ${targets.get('aggressive_entry', 0)}
 """
         elif self.portfolio_config['risk_tolerance'] == 'Aggressive':
-            response += f"""- **Aggressive Entry:** ${targets.get('aggressive_entry', 0)} (recommended for you)
-- **Moderate Entry:** ${targets.get('moderate_entry', 0)}
-- **Conservative Entry:** ${targets.get('conservative_entry', 0)}
+            response += f"""- **🎯 Aggressive Entry:** ${targets.get('aggressive_entry', 0)} **(recommended for you)**
+- Moderate Entry: ${targets.get('moderate_entry', 0)}
+- Conservative Entry: ${targets.get('conservative_entry', 0)}
 """
         else:  # Moderate
-            response += f"""- **Moderate Entry:** ${targets.get('moderate_entry', 0)} (recommended for you)
-- **Conservative Entry:** ${targets.get('conservative_entry', 0)} (safer)
-- **Aggressive Entry:** ${targets.get('aggressive_entry', 0)} (higher risk)
+            response += f"""- **🎯 Moderate Entry:** ${targets.get('moderate_entry', 0)} **(recommended for you)**
+- Conservative Entry: ${targets.get('conservative_entry', 0)} (safer)
+- Aggressive Entry: ${targets.get('aggressive_entry', 0)} (higher risk)
 """
         
         response += f"""- **Target Exit:** ${targets.get('target_exit', 0)} (+{round((targets.get('target_exit', 0) / current_price - 1) * 100, 1) if current_price > 0 else 0}%)
@@ -187,10 +228,7 @@ Be concise. Example: "BUY - Strong fundamentals with 55% upside to fair value ju
 
 ## 📈 Key Financial Metrics
 
-"""
-        
-        # Add metrics table
-        response += f"""| Metric | {self.ticker} | Assessment |
+| Metric | {self.ticker} | Assessment |
 |--------|------|------------|
 | **Revenue Growth** | {metrics.get('revenue_growth_pct', 0)}% | {'🟢 Strong' if metrics.get('revenue_growth_pct', 0) > 15 else '🟡 Moderate' if metrics.get('revenue_growth_pct', 0) > 5 else '🔴 Weak'} |
 | **Profit Margin** | {metrics.get('profit_margin_pct', 0)}% | {'🟢 Excellent' if metrics.get('profit_margin_pct', 0) > 20 else '🟡 Good' if metrics.get('profit_margin_pct', 0) > 10 else '🔴 Low'} |
@@ -210,7 +248,7 @@ Be concise. Example: "BUY - Strong fundamentals with 55% upside to fair value ju
         
         response += "\n---\n\n## 📋 Action Plan\n\n"
         
-        # Build action plan based on analysis
+        # CONDITIONAL ACTION PLAN
         entry_price = targets.get('moderate_entry', 0)
         
         if current_price <= entry_price and health_score >= 60:
@@ -233,7 +271,7 @@ While {self.ticker} shows {upside}% upside potential, the current price of ${cur
 **Recommended Actions:**
 1. **Monitor:** Set price alert for ${entry_price}
 2. **Be Patient:** Wait for pullback before entering
-3. **Alternative:** If must enter now, use smaller position ({self.portfolio_config['portfolio_allocation'] / 2}%)
+3. **Alternative:** If must enter now, use smaller position ({round(self.portfolio_config['portfolio_allocation'] / 2, 1)}%)
 4. **Review:** Reassess if price falls to entry zone
 """
         else:
@@ -248,20 +286,35 @@ With a health score of {health_score}/100 and limited upside of {upside}%, {self
 4. **Reassess:** Revisit if metrics improve significantly
 """
         
+        # QUESTION-SPECIFIC ADDENDUM
+        if 'conservative' in query_lower:
+            response += f"""
+
+---
+
+### 🛡️ Note for Conservative Investors
+
+For your conservative profile, consider:
+- **Entry only at:** ${targets.get('conservative_entry', 0)} (15% below fair value)
+- **Smaller position:** {round(self.portfolio_config['portfolio_allocation'] * 0.7, 1)}% allocation
+- **Stricter stop:** ${round(current_price * 0.95, 2)} (-5% instead of -8%)
+- **Beta consideration:** {metrics.get('beta', 0)} volatility {'may be too high' if metrics.get('beta', 0) > 1.2 else 'is acceptable'}
+"""
+        
         response += f"""
 
 ---
 
-**Investment Profile:** {self.portfolio_config['risk_tolerance']} Risk | {self.portfolio_config['investment_horizon']} Horizon
+**Investment Profile:** {self.portfolio_config['risk_tolerance']} Risk | {self.portfolio_config['investment_horizon']} Horizon | {self.portfolio_config['portfolio_allocation']}% Allocation
 
-⚠️ *This is analysis based on current data, not personalized financial advice. Consult a qualified financial advisor before making investment decisions.*
+⚠️ *This is analysis, not personalized financial advice. Consult a qualified advisor.*
 """
         
         return response
 
 
 class RiskAnalysisAgent:
-    """Risk assessment with structured output"""
+    """Risk assessment with SEC filing integration"""
     
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
         self.ticker = ticker
@@ -276,7 +329,7 @@ class RiskAnalysisAgent:
             metrics_json = get_stock_metrics_tool(self.ticker)
             
             st.write("📄 Extracting SEC filing risks...")
-            filing_risks = search_sec_filing_tool(self.ticker, "risk factors threats concerns regulatory")
+            filing_risks = search_sec_filing_tool(self.ticker, "risk factors threats concerns regulatory operational financial")
             
             st.write("🤖 Analyzing risk profile...")
             
@@ -303,6 +356,8 @@ class RiskAnalysisAgent:
             response += f"🔴 **High Leverage Risk:** Debt-to-Equity ratio of {dte} indicates significant leverage.\n\n"
         elif dte > 80:
             response += f"🟡 **Moderate Debt Levels:** Debt-to-Equity at {dte} is manageable but warrants monitoring.\n\n"
+        elif dte == 0:
+            response += f"🟢 **No Debt:** {self.ticker} operates with zero debt, providing maximum financial flexibility.\n\n"
         else:
             response += f"🟢 **Low Debt Risk:** Conservative D/E ratio of {dte} suggests strong financial position.\n\n"
         
@@ -327,14 +382,25 @@ class RiskAnalysisAgent:
         response += "---\n\n### Business Risks from SEC Filing\n\n"
         
         # Add filing risks if available
-        if risks and "No SEC filing" not in filing_risks:
-            response += filing_risks[:800] + "...\n\n"
+        if filing_risks and "No SEC filing" not in filing_risks and "error" not in filing_risks.lower():
+            response += filing_risks[:1000] + "\n\n"
+            response += "*[Extracted from uploaded SEC 10-Q filing]*\n\n"
         else:
-            response += "*No SEC filing uploaded. Upload 10-Q for detailed risk disclosures.*\n\n"
+            response += f"""⚠️ **No detailed SEC filing data available for {self.ticker}**
+
+Upload the latest 10-Q to see:
+- Specific risk factors disclosed by management
+- Regulatory and compliance risks
+- Operational challenges
+- Market and competitive threats
+
+For now, risk assessment is based on financial metrics only.
+
+"""
         
         response += "---\n\n### Overall Risk Assessment\n\n"
         
-        # Calculate overall risk
+        # Calculate overall risk score
         risk_score = 0
         if dte > 150: risk_score += 2
         elif dte > 80: risk_score += 1
@@ -347,13 +413,13 @@ class RiskAnalysisAgent:
         
         if risk_score >= 4:
             rating = "🔴 **HIGH RISK**"
-            explanation = "Multiple concerning financial indicators suggest elevated investment risk."
+            explanation = "Multiple concerning financial indicators suggest elevated investment risk. Suitable only for aggressive risk tolerance."
         elif risk_score >= 2:
             rating = "🟡 **MODERATE RISK**"
-            explanation = "Some risk factors present. Suitable for moderate risk tolerance investors."
+            explanation = "Some risk factors present. Appropriate for moderate risk tolerance investors with proper position sizing."
         else:
             rating = "🟢 **LOW RISK**"
-            explanation = "Strong financial metrics suggest relatively low investment risk."
+            explanation = "Strong financial metrics suggest relatively low investment risk. Suitable for most risk profiles."
         
         response += f"{rating}\n\n{explanation}\n\n"
         
@@ -362,20 +428,20 @@ class RiskAnalysisAgent:
 ### Risk Mitigation Strategies
 
 1. **Position Sizing:** Limit to {self.portfolio_config['portfolio_allocation']}% of portfolio to manage exposure
-2. **Stop Loss:** Set at ${targets.get('stop_loss', 0)} to limit downside
-3. **Diversification:** Balance with lower-beta stocks in other sectors
-4. **Monitoring:** Review quarterly earnings and filing updates
+2. **Stop Loss:** Set at ${targets.get('stop_loss', 0)} to limit downside to -8%
+3. **Diversification:** Balance with {'lower-beta stocks' if beta > 1.2 else 'other sectors'} to reduce portfolio volatility
+4. **Monitoring:** Review quarterly earnings and SEC filing updates for emerging risks
 
 ---
 
-*Risk profile based on {self.portfolio_config['risk_tolerance']} tolerance setting.*
+*Risk assessment for {self.portfolio_config['risk_tolerance']} tolerance investor.*
 """
         
         return response
 
 
 class ProductAnalysisAgent:
-    """Product/segment analysis"""
+    """Product/segment analysis with SEC filing extraction"""
     
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
         self.ticker = ticker
@@ -390,7 +456,7 @@ class ProductAnalysisAgent:
             metrics_json = get_stock_metrics_tool(self.ticker)
             
             st.write("📄 Searching SEC filing for product data...")
-            products = search_sec_filing_tool(self.ticker, "product segment revenue sales")
+            products = search_sec_filing_tool(self.ticker, "product segment revenue sales performance growth business")
             
             st.write("🤖 Analyzing...")
             
@@ -415,36 +481,38 @@ class ProductAnalysisAgent:
         
         response += f"""**Revenue Growth:** {growth}% YoY """
         if growth > 15:
-            response += "🟢 Strong growth indicates successful product portfolio\n\n"
+            response += "🟢 Strong growth indicates successful product portfolio with multiple drivers\n\n"
         elif growth > 5:
-            response += "🟡 Moderate growth suggests stable but mature products\n\n"
+            response += "🟡 Moderate growth suggests stable but mature product mix\n\n"
         else:
-            response += "🔴 Weak growth may indicate product challenges\n\n"
+            response += "🔴 Weak growth may indicate product challenges or market saturation\n\n"
         
         response += f"""**Profit Margin:** {margin}% """
         if margin > 20:
-            response += "🟢 Premium margins suggest strong product differentiation\n\n"
+            response += "🟢 Premium margins suggest strong product differentiation and pricing power\n\n"
         elif margin > 10:
             response += "🟡 Healthy margins but facing some competitive pressure\n\n"
         else:
-            response += "🔴 Thin margins indicate commoditization risk\n\n"
+            response += "🔴 Thin margins indicate commoditization risk or cost challenges\n\n"
         
         response += "---\n\n### Product/Segment Details from SEC Filing\n\n"
         
         # Add filing data
-        if products and "No SEC filing" not in products:
-            response += products[:1000] + "\n\n"
+        if products and "No SEC filing" not in products and "error" not in products.lower():
+            response += products[:1200] + "\n\n"
+            response += "*[Extracted from uploaded SEC 10-Q filing]*\n\n"
         else:
-            response += f"""⚠️ **No SEC filing uploaded for {self.ticker}**
+            response += f"""⚠️ **Limited product segment data available**
 
-To get detailed product segment breakdowns:
-1. Upload the latest 10-Q filing in the sidebar
-2. The MD&A section contains product category revenue data
-3. I'll extract specific product performance metrics
+To get detailed product/segment breakdown:
+- Upload {self.ticker}'s latest 10-Q filing
+- The MD&A section contains revenue by product category
+- Segment performance with growth rates
+- Geographic breakdowns
 
-For now, the overall metrics suggest:
-- {"Strong" if growth > 10 and margin > 15 else "Moderate" if growth > 0 else "Weak"} product portfolio performance
-- {"Multiple growth drivers likely" if growth > 15 else "Stable product mix" if growth > 5 else "Product challenges possible"}
+**Based on overall metrics:**
+- Product portfolio appears {"strong and competitive" if growth > 10 and margin > 15 else "stable but mature" if growth > 0 else "challenged"}
+- {"Multiple growth drivers likely" if growth > 15 else "Steady performance" if growth > 5 else "May need new products or markets"}
 
 """
         
@@ -452,14 +520,18 @@ For now, the overall metrics suggest:
 
 ### Investment Implications
 
-Based on {growth}% revenue growth and {margin}% margins, {self.ticker}'s product portfolio appears {"strong and competitive" if growth > 10 and margin > 15 else "stable but mature" if growth > 0 else "challenged"}.
+**Product Health Impact:**
+- Revenue growth of {growth}% {'supports' if growth > 10 else 'moderately supports' if growth > 0 else 'raises concerns about'} investment thesis
+- {margin}% margins {'indicate strong competitive position' if margin > 20 else 'are adequate' if margin > 10 else 'suggest pricing pressure'}
+
+**Recommendation:** Upload SEC filing for deeper product analysis before making investment decision.
 """
         
         return response
 
 
 class PeerComparisonAgent:
-    """Peer comparison with tables"""
+    """Peer comparison with detailed tables"""
     
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
         self.ticker = ticker
@@ -470,8 +542,10 @@ class PeerComparisonAgent:
         """Compare to peers"""
         
         with st.status("🏆 Peer Comparison Agent", expanded=True) as status:
-            st.write("🔧 Gathering data...")
+            st.write("🔧 Gathering company metrics...")
             metrics_json = get_stock_metrics_tool(self.ticker)
+            
+            st.write("🏆 Fetching peer comparison data...")
             comparison_json = get_peer_comparison_tool(self.ticker)
             
             st.write("🤖 Analyzing competitive position...")
@@ -494,7 +568,8 @@ class PeerComparisonAgent:
         
         response = f"""## 🏆 Competitive Analysis for {self.ticker}
 
-**Sector:** {comparison.get('sector', 'Unknown')}
+**Sector:** {comparison.get('sector', 'Unknown')}  
+**Comparing to:** {', '.join([p['ticker'] for p in comparison.get('peers', [])[:4]])}
 
 ---
 
@@ -505,56 +580,75 @@ class PeerComparisonAgent:
         if ticker_pe > 0 and sector_pe > 0:
             pe_diff = round(((ticker_pe - sector_pe) / sector_pe * 100), 1)
             if pe_diff > 15:
-                response += f"🔴 **Premium Valuation:** {self.ticker}'s P/E of {ticker_pe} is {abs(pe_diff)}% above sector average of {sector_pe}\n\n"
+                response += f"🔴 **Premium Valuation:** {self.ticker}'s P/E of {ticker_pe} is {abs(pe_diff)}% ABOVE sector average of {sector_pe}\n\n"
+                response += f"*Implication: Investors are paying a premium, expecting superior growth or quality.*\n\n"
             elif pe_diff > -15:
                 response += f"🟡 **Market Valuation:** {self.ticker}'s P/E of {ticker_pe} is roughly in line with sector average of {sector_pe}\n\n"
+                response += f"*Implication: Fair market pricing relative to peers.*\n\n"
             else:
-                response += f"🟢 **Discount Valuation:** {self.ticker}'s P/E of {ticker_pe} is {abs(pe_diff)}% below sector average of {sector_pe}\n\n"
+                response += f"🟢 **Discount Valuation:** {self.ticker}'s P/E of {ticker_pe} is {abs(pe_diff)}% BELOW sector average of {sector_pe}\n\n"
+                response += f"*Implication: Potential value opportunity if fundamentals are solid.*\n\n"
         
         response += "### Profitability Comparison\n\n"
         
         if ticker_margin > sector_margin:
             margin_diff = round(ticker_margin - sector_margin, 1)
-            response += f"🟢 **Above Average:** {self.ticker}'s {ticker_margin}% margin exceeds sector average of {sector_margin}% by {margin_diff} percentage points\n\n"
+            response += f"🟢 **Superior Profitability:** {self.ticker}'s {ticker_margin}% margin EXCEEDS sector average of {sector_margin}% by {margin_diff} percentage points\n\n"
+            response += f"*This indicates better operational efficiency or pricing power than competitors.*\n\n"
         else:
             margin_diff = round(sector_margin - ticker_margin, 1)
-            response += f"🔴 **Below Average:** {self.ticker}'s {ticker_margin}% margin trails sector average of {sector_margin}% by {margin_diff} percentage points\n\n"
+            response += f"🔴 **Below Sector:** {self.ticker}'s {ticker_margin}% margin TRAILS sector average of {sector_margin}% by {margin_diff} percentage points\n\n"
+            response += f"*May face cost pressures or weaker competitive position.*\n\n"
         
         response += "### Growth Comparison\n\n"
         
         if ticker_growth > sector_growth:
             growth_diff = round(ticker_growth - sector_growth, 1)
-            response += f"🟢 **Faster Growth:** {self.ticker}'s {ticker_growth}% growth outpaces sector average of {sector_growth}%\n\n"
+            response += f"🟢 **Faster Growth:** {self.ticker} growing at {ticker_growth}% vs sector average of {sector_growth}% (+{growth_diff} pts)\n\n"
+            response += f"*Outgrowing competitors suggests market share gains or expansion success.*\n\n"
         else:
             growth_diff = round(sector_growth - ticker_growth, 1)
-            response += f"🔴 **Slower Growth:** {self.ticker}'s {ticker_growth}% growth lags sector average of {sector_growth}%\n\n"
+            response += f"🔴 **Slower Growth:** {self.ticker} growing at {ticker_growth}% vs sector average of {sector_growth}% (-{growth_diff} pts)\n\n"
+            response += f"*May be losing market share or facing headwinds.*\n\n"
         
-        response += "---\n\n### Peer Data\n\n"
+        response += "---\n\n### Detailed Peer Metrics\n\n"
         
         # Peer table
         if comparison.get('peers'):
-            response += "| Ticker | P/E | Profit Margin | Revenue Growth |\n"
-            response += "|--------|-----|---------------|----------------|\n"
+            response += "| Ticker | P/E Ratio | Profit Margin | Revenue Growth |\n"
+            response += "|--------|-----------|---------------|----------------|\n"
             for peer in comparison['peers'][:4]:
                 response += f"| {peer['ticker']} | {peer.get('pe', 'N/A')} | {peer.get('profit_margin_pct', 'N/A')}% | {peer.get('revenue_growth_pct', 'N/A')}% |\n"
             response += f"| **{self.ticker}** | **{ticker_pe}** | **{ticker_margin}%** | **{ticker_growth}%** |\n"
             response += f"| *Sector Avg* | *{sector_pe}* | *{sector_margin}%* | *{sector_growth}%* |\n\n"
         
-        response += "---\n\n### Investment Verdict\n\n"
+        response += "---\n\n### Competitive Scorecard\n\n"
         
-        # Determine if better than peers
+        # Determine wins
         beats_valuation = ticker_pe < sector_pe if ticker_pe > 0 and sector_pe > 0 else False
         beats_profitability = ticker_margin > sector_margin
         beats_growth = ticker_growth > sector_growth
         
         wins = sum([beats_valuation, beats_profitability, beats_growth])
         
+        response += f"""**Metrics Won:** {wins}/3
+
+- {'✅' if beats_valuation else '❌'} Valuation (P/E): {'Cheaper' if beats_valuation else 'More expensive'} than peers
+- {'✅' if beats_profitability else '❌'} Profitability: {'Higher' if beats_profitability else 'Lower'} margins than peers
+- {'✅' if beats_growth else '❌'} Growth: {'Faster' if beats_growth else 'Slower'} than peers
+
+---
+
+### Investment Verdict
+
+"""
+        
         if wins >= 2:
-            response += f"✅ **Strong Relative Position:** {self.ticker} outperforms sector peers on {wins} out of 3 key metrics, making it an attractive choice within {comparison.get('sector', 'the sector')}."
+            response += f"✅ **Strong Relative Position**\n\n{self.ticker} outperforms sector peers on {wins} out of 3 key metrics. This competitive strength makes it an attractive investment choice within {comparison.get('sector', 'the sector')}.\n\n**Recommendation:** Favorable vs peers - consider as a top pick in sector."
         elif wins == 1:
-            response += f"🟡 **Mixed Position:** {self.ticker} shows competitive performance on some metrics but lags on others. Consider sector alternatives."
+            response += f"🟡 **Mixed Competitive Position**\n\n{self.ticker} shows competitive performance on some metrics but lags on others. Neither clearly better nor worse than sector average.\n\n**Recommendation:** Adequate but not exceptional vs peers - consider sector alternatives."
         else:
-            response += f"🔴 **Weak Position:** {self.ticker} underperforms sector peers on most metrics. Better opportunities may exist elsewhere in {comparison.get('sector', 'the sector')}."
+            response += f"🔴 **Weak Relative Position**\n\n{self.ticker} underperforms sector peers across most key metrics. Better investment opportunities likely exist elsewhere in {comparison.get('sector', 'the sector')}.\n\n**Recommendation:** Avoid in favor of stronger sector peers."
         
         return response
 
@@ -574,6 +668,9 @@ class GeneralAnalysisAgent:
             st.write("🔧 Gathering data...")
             metrics_json = get_stock_metrics_tool(self.ticker)
             health_json = calculate_health_score_tool(self.ticker)
+            
+            st.write("📄 Searching SEC filing...")
+            filing_data = search_sec_filing_tool(self.ticker, query)
             
             st.write("🤖 Analyzing...")
             
@@ -625,19 +722,28 @@ class GeneralAnalysisAgent:
 | | Total Revenue | ${metrics.get('revenue_b', 0)}B |
 | **Risk** | Debt/Equity | {metrics.get('debt_to_equity', 0)} |
 | | Beta | {metrics.get('beta', 0)} |
+| | Current Ratio | {metrics.get('current_ratio', 0)} |
 
 ---
 
-### Quick Assessment
+### SEC Filing Insights
 
 """
         
-        # Quick verdict
-        if health.get('score', 0) > 70:
-            response += f"✅ **Strong Fundamentals:** {self.ticker} demonstrates solid financial health with a score of {health.get('score', 0)}/100."
-        elif health.get('score', 0) > 50:
-            response += f"🟡 **Adequate Fundamentals:** {self.ticker} shows reasonable financial health at {health.get('score', 0)}/100."
+        if filing_data and "No SEC filing" not in filing_data:
+            response += filing_data[:800] + "\n\n"
+            response += "*[Extracted from uploaded 10-Q]*\n\n"
         else:
-            response += f"🔴 **Weak Fundamentals:** {self.ticker} has concerning financial metrics with a low score of {health.get('score', 0)}/100."
+            response += "⚠️ Upload 10-Q filing for management discussion and detailed disclosures.\n\n"
+        
+        response += "---\n\n### Quick Assessment\n\n"
+        
+        # Overall verdict
+        if health.get('score', 0) > 70:
+            response += f"✅ **Strong Fundamentals:** {self.ticker} demonstrates solid financial health with a score of {health.get('score', 0)}/100. Metrics suggest a quality company worth considering for investment."
+        elif health.get('score', 0) > 50:
+            response += f"🟡 **Adequate Fundamentals:** {self.ticker} shows reasonable financial health at {health.get('score', 0)}/100. Suitable for diversified portfolios but not a standout."
+        else:
+            response += f"🔴 **Weak Fundamentals:** {self.ticker} has concerning financial metrics with a low score of {health.get('score', 0)}/100. Proceed with caution or avoid."
         
         return response
