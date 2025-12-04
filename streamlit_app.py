@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import re
 
 # Custom imports
-from utils.agents import FinancialAgentOrchestrator
+from utils.agents import FinancialAgentOrchestrator, supported_companies_markdown
 from utils.rag import ingest_filing_to_rag, clear_filing_data
 from utils.tools import get_stock_metrics_tool
 
@@ -272,6 +272,10 @@ with st.sidebar:
         index=0
     )
     st.session_state.current_ticker = ticker
+
+    # Show unified supported companies list (matches agents)
+    with st.expander("✅ Supported Companies"):
+        st.markdown(supported_companies_markdown())
     
     st.divider()
     
@@ -688,7 +692,8 @@ with tab2:
             
         else:
             st.error(f"⚠️ No data for {ticker}")
-            st.info("💡 Available: AAPL, META, MSFT, TSLA, GOOGL, NVDA, AMZN")
+            # Match actual BACKUP_METRICS tickers from tools.py for clarity
+            st.info("💡 Backup demo data is currently available for: AAPL, MSFT, META, GOOGL, NVDA, TSLA, AMZN, V, JPM, NFLX, DIS.")
             
     except Exception as e:
         st.error(f"Error: {str(e)}")

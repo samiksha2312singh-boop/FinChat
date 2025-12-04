@@ -14,33 +14,54 @@ from langchain_openai import OpenAIEmbeddings
 from typing import Dict, List
 
 
+# ============================================================================
+# INITIALIZERS (CACHED)
+# ============================================================================
+
 @st.cache_resource
 def init_chromadb():
-    """Initialize ChromaDB client with persistent storage"""
+    """Initialize ChromaDB client with persistent storage."""
     client = chromadb.PersistentClient(path="./data/sec_filings_db")
     return client
 
 
+@st.cache_resource
+def get_embeddings_model():
+    """Return a cached OpenAI embeddings model instance."""
+    return OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        api_key=st.secrets["OPENAI_API_KEY"]
+    )
+
+
+# ============================================================================
+# COLLECTION MANAGEMENT
+# ============================================================================
+
 def create_collection_for_ticker(ticker: str):
-    """Create or retrieve collection for specific ticker"""
+    """Create or retrieve collection for specific ticker."""
     client = init_chromadb()
     collection_name = f"{ticker.lower()}_filings"
     
     try:
         collection = client.get_collection(name=collection_name)
-    except:
+    except Exception:
         collection = client.create_collection(name=collection_name)
     
     return collection
 
 
+# ============================================================================
+# CHUNKING
+# ============================================================================
+
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
     """
-    Split text into overlapping chunks
+    Split text into overlapping chunks.
     
     Args:
         text: Input text to chunk
-        chunk_size: Target size of each chunk
+        chunk_size: Target size of each chunk (in characters)
         overlap: Number of characters to overlap between chunks
     
     Returns:
@@ -68,9 +89,13 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str]
     return chunks
 
 
+# ============================================================================
+# INGESTION
+# ============================================================================
+
 def ingest_filing_to_rag(filing_data: Dict, ticker: str):
     """
-    Process SEC filing and store in vector database
+    Process SEC filing and store in vector database.
     
     Args:
         filing_data: Dictionary with filing sections
@@ -104,11 +129,8 @@ def ingest_filing_to_rag(filing_data: Dict, ticker: str):
         st.warning("No content to ingest")
         return collection
     
-    # Generate embeddings
-    embeddings_model = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        api_key=st.secrets["OPENAI_API_KEY"]
-    )
+    # Generate embeddings (cached model)
+    embeddings_model = get_embeddings_model()
     
     try:
         embeddings = embeddings_model.embed_documents(all_chunks)
@@ -134,9 +156,13 @@ def ingest_filing_to_rag(filing_data: Dict, ticker: str):
     return collection
 
 
+# ============================================================================
+# BASIC SEMANTIC SEARCH
+# ============================================================================
+
 def search_filing(ticker: str, query: str, n_results: int = 5) -> List[Dict]:
     """
-    Search SEC filing using semantic search (basic retrieval)
+    Search SEC filing using semantic search (basic retrieval).
     
     Args:
         ticker: Stock ticker
@@ -150,14 +176,11 @@ def search_filing(ticker: str, query: str, n_results: int = 5) -> List[Dict]:
         collection = create_collection_for_ticker(ticker)
         
         if collection.count() == 0:
+            # No filing data for this ticker yet
             return []
         
-        # Generate query embedding
-        embeddings_model = OpenAIEmbeddings(
-            model="text-embedding-3-small",
-            api_key=st.secrets["OPENAI_API_KEY"]
-        )
-        
+        # Generate query embedding (cached model)
+        embeddings_model = get_embeddings_model()
         query_embedding = embeddings_model.embed_query(query)
         
         # Search
@@ -169,7 +192,7 @@ def search_filing(ticker: str, query: str, n_results: int = 5) -> List[Dict]:
         
         # Format results
         chunks = []
-        if results['documents'] and results['documents'][0]:
+        if results.get('documents') and results['documents'][0]:
             for i in range(len(results['documents'][0])):
                 chunks.append({
                     'text': results['documents'][0][i],
@@ -185,9 +208,13 @@ def search_filing(ticker: str, query: str, n_results: int = 5) -> List[Dict]:
         return []
 
 
+# ============================================================================
+# RERANKING PIPELINE
+# ============================================================================
+
 def rerank_chunks(ticker: str, query: str, n_results: int = 3) -> List[Dict]:
     """
-    Search and rerank chunks using LLM for better relevance
+    Search and rerank chunks using LLM for better relevance.
     
     This implements the full RAG + Reranking pipeline:
     1. Retrieve top N chunks using vector search
@@ -207,7 +234,7 @@ def rerank_chunks(ticker: str, query: str, n_results: int = 3) -> List[Dict]:
     
     try:
         # Step 1: RETRIEVE - Get more chunks than needed
-        initial_n = min(10, n_results * 3)  # Get 3x more for reranking
+        initial_n = min(10, n_results * 3)  # Get ~3x more for reranking
         initial_chunks = search_filing(ticker, query, n_results=initial_n)
         
         if not initial_chunks or len(initial_chunks) == 0:
@@ -256,7 +283,7 @@ Example: [8, 3, 9, 2, 7, 6]
         
         try:
             scores = json.loads(scores_text)
-        except:
+        except Exception:
             # Fallback if LLM didn't return valid JSON
             st.warning("Reranking failed, using vector search results")
             return initial_chunks[:n_results]
@@ -281,8 +308,12 @@ Example: [8, 3, 9, 2, 7, 6]
         return search_filing(ticker, query, n_results)
 
 
+# ============================================================================
+# MAINTENANCE
+# ============================================================================
+
 def clear_filing_data(ticker: str):
-    """Clear all stored data for a ticker"""
+    """Clear all stored filing data for a ticker."""
     try:
         client = init_chromadb()
         collection_name = f"{ticker.lower()}_filings"
