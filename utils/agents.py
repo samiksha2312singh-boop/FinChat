@@ -198,35 +198,48 @@ class FinancialAgentOrchestrator:
         self.llm = get_llm()
 
     def classify_intent(self, query: str) -> str:
-        """Classify user query"""
+        """Classify user query into one of: investment, risk, product, comparison, general."""
         query_lower = query.lower()
 
-        investment_keywords = [
-            'invest', 'buy', 'sell', 'hold', 'price target', 'should i',
-            'entry', 'exit', 'good buy', 'what should i do', 'have stocks',
-            'stock price', 'price of'
-        ]
-        risk_keywords = [
-            'risk', 'danger', 'concern', 'threat', 'safe', 'risky',
-            'worry', 'worried'
-        ]
-        product_keywords = [
-            'product', 'segment', 'business', 'revenue', 'sales',
-            'performing', 'advertising'
-        ]
+        # Comparison-oriented language
         comparison_keywords = [
-            'compare', 'competitor', 'peer', 'vs', 'versus',
-            'better than', 'or'
+            'compare', 'comparison', 'vs', 'versus',
+            'better than', 'relative to', 'stand relative',
+            'stack up', 'peer', 'peers', 'competitor', 'competitors'
         ]
 
-        if any(word in query_lower for word in investment_keywords):
-            return 'investment'
-        elif any(word in query_lower for word in risk_keywords):
-            return 'risk'
-        elif any(word in query_lower for word in product_keywords):
-            return 'product'
-        elif any(word in query_lower for word in comparison_keywords):
+        # Make "invest" safer so it doesn't hit "investor"
+        investment_keywords = [
+            'should i invest', 'invest in', 'investing in',
+            'buy', 'sell', 'hold', 'price target',
+            'good buy', 'what should i do',
+            'have stocks', 'stock price', 'price of'
+        ]
+
+        risk_keywords = [
+            'risk', 'risks', 'danger', 'concern', 'threat',
+            'safe', 'safety', 'risky', 'worry', 'worried'
+        ]
+
+        product_keywords = [
+            'product', 'products', 'segment', 'segments',
+            'business mix', 'business segments',
+            'revenue by segment', 'sales mix',
+            'advertising', 'ad revenue'
+        ]
+
+        def contains_any(text: str, keywords) -> bool:
+            return any(kw in text for kw in keywords)
+
+        # Priority: comparison → investment → risk → product → general
+        if contains_any(query_lower, comparison_keywords):
             return 'comparison'
+        elif contains_any(query_lower, investment_keywords):
+            return 'investment'
+        elif contains_any(query_lower, risk_keywords):
+            return 'risk'
+        elif contains_any(query_lower, product_keywords):
+            return 'product'
         else:
             return 'general'
 
@@ -235,15 +248,25 @@ class FinancialAgentOrchestrator:
         intent = self.classify_intent(query)
 
         if intent == 'investment':
-            return InvestmentAdvisorAgent(self.ticker, self.portfolio_config, self.llm).analyze(query)
+            return InvestmentAdvisorAgent(
+                self.ticker, self.portfolio_config, self.llm
+            ).analyze(query)
         elif intent == 'risk':
-            return RiskAnalysisAgent(self.ticker, self.portfolio_config, self.llm).analyze(query)
+            return RiskAnalysisAgent(
+                self.ticker, self.portfolio_config, self.llm
+            ).analyze(query)
         elif intent == 'product':
-            return ProductAnalysisAgent(self.ticker, self.portfolio_config, self.llm).analyze(query)
+            return ProductAnalysisAgent(
+                self.ticker, self.portfolio_config, self.llm
+            ).analyze(query)
         elif intent == 'comparison':
-            return PeerComparisonAgent(self.ticker, self.portfolio_config, self.llm).analyze(query)
+            return PeerComparisonAgent(
+                self.ticker, self.portfolio_config, self.llm
+            ).analyze(query)
         else:
-            return GeneralAnalysisAgent(self.ticker, self.portfolio_config, self.llm).analyze(query)
+            return GeneralAnalysisAgent(
+                self.ticker, self.portfolio_config, self.llm
+            ).analyze(query)
 
 
 # ============================================================================
@@ -463,7 +486,7 @@ Provide: "[BUY/HOLD/WAIT] - [clear explanation]"
 # RISK ANALYSIS AGENT
 # ============================================================================
 
-cclass RiskAnalysisAgent:
+class RiskAnalysisAgent:
     """Risk assessment with ticker extraction"""
 
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
@@ -661,7 +684,7 @@ Focus on clarity. Avoid repeating raw numbers; interpret them.
 # ============================================================================
 
 class ProductAnalysisAgent:
-    """Product / segment analysis with ticker extraction"""
+    """Product & segment analysis with ticker extraction"""
 
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
         self.ticker = ticker
@@ -671,61 +694,126 @@ class ProductAnalysisAgent:
     def analyze(self, query: str) -> str:
         analyzed_ticker, found_in_query = extract_ticker_from_query(query, self.ticker)
 
+        # Unsupported company handling
         if analyzed_ticker is None and found_in_query:
-            return "## ⚠️ Company Not Supported\n\nSorry, product analysis is not available for this company."
+            return f"""## ⚠️ Company Not Supported
+
+Sorry, I don't have product/segment analysis data for the company you mentioned.
+
+Supported companies:
+
+{supported_companies_markdown()}
+
+Select a supported company from the dropdown or ask about one by name.
+"""
 
         with st.status("📦 Product Analysis Agent", expanded=True) as status:
-            st.write(f"🎯 Analyzing {analyzed_ticker} products/segments...")
+            status.write(f"🎯 Analyzing product mix for {analyzed_ticker}...")
+            status.write("🔧 Gathering financial metrics...")
             metrics_json = get_stock_metrics_tool(analyzed_ticker)
-            metrics = {}
+
+            status.write("🏥 Checking overall financial health...")
+            health_json = calculate_health_score_tool(analyzed_ticker)
+
+            status.write("📄 Pulling product & segment discussion from SEC filing...")
+            # Focus the RAG query on business / products / segments
+            sec_product_text = search_sec_filing_tool(
+                analyzed_ticker,
+                f"business overview products services segments revenue drivers competition user engagement advertising subscriptions {query}"
+            )
+
             try:
                 metrics = json.loads(metrics_json)
+                health = json.loads(health_json)
             except Exception:
-                pass
+                return "⚠️ Error loading product data."
 
-            st.write("📄 Extracting product/segment info from SEC filing...")
-            filing_text = search_sec_filing_tool(
-                analyzed_ticker,
-                "products services segments revenue growth business lines customers platforms advertising"
-            )
+            if "error" in metrics:
+                return "⚠️ Unable to fetch product metrics for this company."
 
             status.update(label="✅ Product Analysis Complete", state="complete")
 
-        prompt = f"""You are a fundamental equity analyst.
+        # --- Pull out some useful numbers/labels ---
 
-The user asked:
+        company_name = metrics.get("company_name", analyzed_ticker)
+        sector = metrics.get("sector", "Unknown sector")
+        industry = metrics.get("industry", "Unknown industry")
+        revenue_growth = metrics.get("revenue_growth_pct", 0)
+        profit_margin = metrics.get("profit_margin_pct", 0)
+        operating_margin = metrics.get("operating_margin_pct", 0)
+        health_score = health.get("score", 0)
+        health_rating = health.get("rating", "N/A")
+
+        # --- Build LLM prompt focused on products & segments ---
+
+        product_prompt = f"""You are an equity research analyst focused on **product and segment analysis**.
+
+User question:
 \"\"\"{query}\"\"\"
 
+Company: {company_name} ({analyzed_ticker})
+Sector / Industry: {sector} / {industry}
 
-Here is a numeric snapshot (if present):
-{json.dumps(metrics, indent=2)}
+Key financial context:
+- Revenue growth (YoY): {revenue_growth}%
+- Profit margin: {profit_margin}%
+- Operating margin: {operating_margin}%
+- Health score: {health_score}/100 ({health_rating})
+
+Here are excerpts from the company's most recent 10-Q / 10-K filing related to business, products, and segments:
+
+\"\"\"{sec_product_text[:8000]}\"\"\"
 
 
-Here are excerpts from the company's SEC filings related to business segments, products, and revenue:
+Using ONLY this information plus your general understanding of the company (but **do not invent precise numeric breakdowns**), write a concise markdown answer with these sections:
 
-\"\"\"{filing_text[:8000]}\"\"\"
+1. **Product & Segment Snapshot**  
+   - 3–6 bullets listing the main products or business segments and what they do (e.g., for META, "Family of Apps", "Reality Labs").
 
+2. **What’s Driving Growth**  
+   - 2–5 bullets describing which products/segments are currently driving revenue growth or engagement and why.  
+   - If the filing mentions ads, subscriptions, cloud, hardware, or specific apps, refer to them explicitly.
 
-Write a markdown answer with:
+3. **Areas of Weakness or Heavy Investment**  
+   - 2–5 bullets on segments that are under pressure, loss-making, cyclical, or where the company is heavily investing for future upside (e.g., VR/AR, metaverse, new chips, etc.).
 
-1. **Main Business Segments / Product Lines** – bullet list with 1–2 lines each.
-2. **Which Segments Drive Growth vs. Profitability** – clearly distinguish, using hints from the text and metrics.
-3. **Key Dependencies / Concentrations** – e.g., reliance on a platform, geography, or customer group.
-4. **Product / Segment Risks** – 3–5 bullets.
+4. **Takeaway for a {self.portfolio_config['risk_tolerance']} Investor**  
+   - A short paragraph (3–5 sentences) summarizing how diversified the business is across products/segments and how the product mix affects risk and upside.  
+   - Do **not** give explicit buy/sell advice; just explain risk/return profile.
 
-Keep it focused on {analyzed_ticker}. Do NOT discuss other companies.
+Keep the tone clear and concrete, and avoid buzzwords or generic filler.
 """
 
-        llm_resp = self.llm.invoke(prompt)
-        return f"## 📦 Product & Segment Analysis for {analyzed_ticker}\n\n" + llm_resp.content.strip()
+        llm_resp = self.llm.invoke(product_prompt)
+        narrative = llm_resp.content.strip()
 
+        # Simple header + quick snapshot table
+        header = f"""## 📦 Product & Segment Analysis for {analyzed_ticker}
+
+**Company:** {company_name}  
+**Sector / Industry:** {sector} / {industry}  
+
+### 🔢 High-Level Business Snapshot
+
+| Metric | Value |
+|--------|-------|
+| Revenue Growth (YoY) | {revenue_growth}% |
+| Profit Margin | {profit_margin}% |
+| Operating Margin | {operating_margin}% |
+| Health Score | {health_score}/100 ({health_rating}) |
+
+---
+
+"""
+
+        return header + narrative
 
 # ============================================================================
 # PEER COMPARISON AGENT
 # ============================================================================
 
 class PeerComparisonAgent:
-    """Peer comparison with head-to-head support"""
+    """Peer comparison with head-to-head & sector support"""
 
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
         self.ticker = ticker
@@ -733,141 +821,199 @@ class PeerComparisonAgent:
         self.llm = llm
 
     def analyze(self, query: str) -> str:
+        # Try to pull one or two tickers out of the question
         ticker1, ticker2 = extract_tickers_from_query(query, self.ticker)
 
+        # If the user mentioned an unsupported company explicitly
+        if ticker1 is None:
+            return f"""## ⚠️ Company Not Supported
+
+I couldn't find a supported ticker in your question.
+
+Supported companies:
+
+{supported_companies_markdown()}
+
+Try something like:
+- "Compare AAPL vs MSFT"
+- "Is META better than GOOGL for growth?"
+"""
+
+        # If two tickers found → true head-to-head
         if ticker2:
             return self.head_to_head_comparison(ticker1, ticker2, query)
+        # Otherwise compare ticker1 vs its sector peers
         else:
             return self.sector_comparison(ticker1, query)
 
+    # ------------------------------------------------------------------ #
+    # HEAD-TO-HEAD
+    # ------------------------------------------------------------------ #
+
     def head_to_head_comparison(self, ticker1: str, ticker2: str, query: str) -> str:
-        """Direct comparison between two tickers"""
+        with st.status("🏆 Peer Comparison Agent", expanded=True) as status:
+            status.write(f"🔍 Comparing {ticker1} vs {ticker2}...")
 
-        metrics1 = json.loads(get_stock_metrics_tool(ticker1))
-        metrics2 = json.loads(get_stock_metrics_tool(ticker2))
+            status.write("📊 Fetching core metrics...")
+            m1_json = get_stock_metrics_tool(ticker1)
+            m2_json = get_stock_metrics_tool(ticker2)
 
-        # Health scores (best-effort)
-        try:
-            health1 = json.loads(calculate_health_score_tool(ticker1))
-        except Exception:
-            health1 = {}
-        try:
-            health2 = json.loads(calculate_health_score_tool(ticker2))
-        except Exception:
-            health2 = {}
+            status.write("🏥 Fetching health scores...")
+            h1_json = calculate_health_score_tool(ticker1)
+            h2_json = calculate_health_score_tool(ticker2)
 
-        table = f"""## 🏆 {ticker1} vs {ticker2} – Peer Comparison
+            try:
+                m1 = json.loads(m1_json)
+                m2 = json.loads(m2_json)
+                h1 = json.loads(h1_json)
+                h2 = json.loads(h2_json)
+            except Exception:
+                return "⚠️ Error loading comparison data."
 
-### Core Metrics
+            if "error" in m1 or "error" in m2:
+                return f"""## ⚠️ Peer Data Not Available
+
+I wasn't able to fetch comparison data for this pair.
+
+Try comparing among these tickers (built-in peer set):
+
+- AAPL, MSFT, GOOGL, META, NVDA, TSLA, AMZN, NFLX, DIS, V, JPM
+"""
+
+            status.write("🤖 Generating comparison narrative...")
+
+        # Quick helpers
+        def safe(x, key, default=0.0):
+            return x.get(key, default) or default
+
+        # Build a compact numeric snapshot
+        table = f"""## 🏆 Head-to-Head: {ticker1} vs {ticker2}
+
+### 🔢 Core Metrics Snapshot
 
 | Metric | {ticker1} | {ticker2} |
 |--------|-----------|-----------|
-| **Price** | ${metrics1.get('price', '–')} | ${metrics2.get('price', '–')} |
-| **P/E** | {metrics1.get('pe_ratio', '–')} | {metrics2.get('pe_ratio', '–')} |
-| **Revenue (B)** | {metrics1.get('revenue_b', '–')} | {metrics2.get('revenue_b', '–')} |
-| **Rev. Growth %** | {metrics1.get('revenue_growth_pct', '–')} | {metrics2.get('revenue_growth_pct', '–')} |
-| **Profit Margin %** | {metrics1.get('profit_margin_pct', '–')} | {metrics2.get('profit_margin_pct', '–')} |
-| **Debt/Equity** | {metrics1.get('debt_to_equity', '–')} | {metrics2.get('debt_to_equity', '–')} |
-| **Beta** | {metrics1.get('beta', '–')} | {metrics2.get('beta', '–')} |
-| **Health Score** | {health1.get('score', '–')} | {health2.get('score', '–')} |
+| P/E Ratio | {safe(m1, 'pe_ratio'):.1f} | {safe(m2, 'pe_ratio'):.1f} |
+| Forward P/E | {safe(m1, 'forward_pe'):.1f} | {safe(m2, 'forward_pe'):.1f} |
+| Revenue Growth (YoY) | {safe(m1, 'revenue_growth_pct'):.1f}% | {safe(m2, 'revenue_growth_pct'):.1f}% |
+| Profit Margin | {safe(m1, 'profit_margin_pct'):.1f}% | {safe(m2, 'profit_margin_pct'):.1f}% |
+| Operating Margin | {safe(m1, 'operating_margin_pct'):.1f}% | {safe(m2, 'operating_margin_pct'):.1f}% |
+| Debt / Equity | {safe(m1, 'debt_to_equity'):.1f} | {safe(m2, 'debt_to_equity'):.1f} |
+| Health Score | {safe(h1, 'score', 0):.0f}/100 | {safe(h2, 'score', 0):.0f}/100 |
 """
 
-        prompt = f"""You are comparing two large-cap stocks.
+        # LLM prompt for interpretation
+        prompt = f"""You are an equity analyst comparing **{ticker1}** vs **{ticker2}**.
 
 User question:
 \"\"\"{query}\"\"\"
 
 
-Metrics for {ticker1}:
-{json.dumps(metrics1, indent=2)}
+Here are summary metrics:
 
-Health for {ticker1}: {json.dumps(health1, indent=2)}
+{table}
 
-Metrics for {ticker2}:
-{json.dumps(metrics2, indent=2)}
+Write a concise markdown answer with:
 
-Health for {ticker2}: {json.dumps(health2, indent=2)}
+1. **Overview** – 2–3 sentences summarizing which company looks stronger overall and why.
+2. **Strengths of {ticker1}** – 3–5 short bullets.
+3. **Strengths of {ticker2}** – 3–5 short bullets.
+4. **Risk Profile Comparison** – 2–4 bullets comparing volatility, leverage, and business concentration.
+5. **Fit for a {self.portfolio_config['risk_tolerance']} Investor** – 3–5 sentences describing which type of investor might prefer each stock (but do NOT give explicit buy/sell instructions).
 
-Write a concise markdown summary with:
-
-1. **Valuation & Growth** – who looks cheaper / faster-growing.
-2. **Profitability & Quality** – margins, balance sheet strength.
-3. **Risk Profile** – volatility, leverage.
-4. **Who Better Fits a {self.portfolio_config['risk_tolerance']} Investor** – high level, no explicit investment advice.
-
-Be neutral and explain trade-offs instead of picking a “winner”.
+Be specific but plain-English. Do not invent extra numbers beyond what you see above.
 """
 
-        llm_resp = self.llm.invoke(prompt)
-        return table + "\n\n---\n\n" + llm_resp.content.strip()
+        resp = self.llm.invoke(prompt)
+        narrative = resp.content.strip()
+
+        return table + "\n\n" + narrative
+
+    # ------------------------------------------------------------------ #
+    # SINGLE-TICKER VS SECTOR PEERS
+    # ------------------------------------------------------------------ #
 
     def sector_comparison(self, ticker: str, query: str) -> str:
-        """Compare a ticker vs its sector peers using backup peer data where available"""
+        with st.status("🏆 Peer Comparison Agent", expanded=True) as status:
+            status.write(f"🔍 Comparing {ticker} vs its sector peers...")
 
-        peer_json = get_peer_comparison_tool(ticker)
-        data = json.loads(peer_json)
+            status.write("📊 Fetching peer data...")
+            peer_json = get_peer_comparison_tool(ticker)
+            m_json = get_stock_metrics_tool(ticker)
 
-        if 'error' in data:
-            # Fallback: just ask LLM to describe positioning using metrics
-            metrics = json.loads(get_stock_metrics_tool(ticker))
-            prompt = f"""The user asked:
-\"\"\"{query}\"\"\"
+            try:
+                peer = json.loads(peer_json)
+                metrics = json.loads(m_json)
+            except Exception:
+                return "⚠️ Error loading sector comparison data."
 
+            if "error" in peer:
+                # Fallback: no structured peer data
+                return f"""## 🏆 Peer & Sector View for {ticker}
 
-Here are metrics for {ticker}:
-{json.dumps(metrics, indent=2)}
+Structured peer comparison data isn't available for this ticker yet.
 
-Explain in markdown how {ticker} compares to a typical company in its sector
-in terms of growth, profitability, and risk. You don't have exact peer numbers,
-so speak qualitatively based on the absolute metrics.
+You can still compare it manually by asking:
+- "Compare {ticker} vs MSFT"
+- "How does {ticker} compare to GOOGL on growth and margins?"
 """
-            llm_resp = self.llm.invoke(prompt)
-            return f"## 🏆 Peer & Sector Positioning for {ticker}\n\n" + llm_resp.content.strip()
+
+            status.write("🤖 Analyzing peer set...")
 
         # Build peer table
         rows = []
-        for peer in data.get('peers', []):
+        for p in peer.get("peers", []):
             rows.append(
-                f"| {peer['ticker']} | {peer['pe']} | {peer['profit_margin_pct']}% | {peer['revenue_growth_pct']}% |"
+                f"| {p['ticker']} | {p['pe']:.1f} | "
+                f"{p['profit_margin_pct']:.1f}% | {p['revenue_growth_pct']:.1f}% |"
             )
 
-        peer_table = f"""## 🏆 Peer Comparison for {ticker}
+        peer_table = "\n".join(rows) if rows else "_Peer details not available_"
 
-### Sector: {data.get('sector', 'Unknown')}
+        header = f"""## 🏆 {ticker} vs Sector Peers
 
-#### {ticker} vs Sector Averages
+**Sector:** {peer.get('sector', 'Unknown')}  
+
+### 🔢 Snapshot vs Sector
 
 | Metric | {ticker} | Sector Avg |
 |--------|----------|-----------|
-| **P/E** | {data.get('ticker_pe', '–')} | {data.get('sector_avg_pe', '–')} |
-| **Profit Margin %** | {data.get('ticker_margin_pct', '–')} | {data.get('sector_avg_margin_pct', '–')} |
-| **Revenue Growth %** | {data.get('ticker_growth_pct', '–')} | {data.get('sector_avg_growth_pct', '–')} |
+| P/E Ratio | {peer.get('ticker_pe', 0):.1f} | {peer.get('sector_avg_pe', 0):.1f} |
+| Profit Margin | {peer.get('ticker_margin_pct', 0):.1f}% | {peer.get('sector_avg_margin_pct', 0):.1f}% |
+| Revenue Growth (YoY) | {peer.get('ticker_growth_pct', 0):.1f}% | {peer.get('sector_avg_growth_pct', 0):.1f}% |
 
-#### Selected Peers
+### 📊 Key Peers
 
-| Peer | P/E | Profit Margin % | Revenue Growth % |
-|------|-----|-----------------|------------------|
-{chr(10).join(rows)}
+| Ticker | P/E | Profit Margin | Revenue Growth |
+|--------|-----|---------------|----------------|
+{peer_table}
+
+---
 """
 
-        prompt = f"""User question:
+        prompt = f"""You are an equity analyst.
+
+User question:
 \"\"\"{query}\"\"\"
 
 
-Here is structured peer data for {ticker}:
-{json.dumps(data, indent=2)}
+Here is a summary of how **{ticker}** compares to its sector peers:
 
-Explain in markdown:
+{header}
 
-1. How {ticker} compares to its sector on valuation (P/E), profitability, and growth.
-2. How it stacks up against the listed peers.
-3. What this positioning implies for a {self.portfolio_config['risk_tolerance']} investor.
+Write a concise markdown explanation with:
 
-Be specific but concise.
+1. **Positioning vs Peers** – 3–5 bullets on valuation (P/E), growth, and profitability vs sector averages.
+2. **Competitive Edge / Weakness** – 3–5 bullets on where {ticker} stands out or lags (e.g., higher margins, faster growth, expensive valuation, etc.).
+3. **Takeaway for a {self.portfolio_config['risk_tolerance']} Investor** – 3–5 sentences about what this peer positioning means in terms of risk and potential reward.
+
+Do not reprint the tables; interpret them in plain English.
 """
 
-        llm_resp = self.llm.invoke(prompt)
-        return peer_table + "\n\n---\n\n" + llm_resp.content.strip()
+        resp = self.llm.invoke(prompt)
+        narrative = resp.content.strip()
+
+        return header + "\n" + narrative
 
 
 # ============================================================================
