@@ -463,7 +463,7 @@ Provide: "[BUY/HOLD/WAIT] - [clear explanation]"
 # RISK ANALYSIS AGENT
 # ============================================================================
 
-class RiskAnalysisAgent:
+cclass RiskAnalysisAgent:
     """Risk assessment with ticker extraction"""
 
     def __init__(self, ticker: str, portfolio_config: Dict, llm):
@@ -488,6 +488,9 @@ Supported companies:
 Select a supported company from the dropdown or ask about one by name.
 """
 
+        query_lower = query.lower()
+        quote_mode = ("quote" in query_lower) and ("sentence" in query_lower)
+
         with st.status("🛡️ Risk Analysis Agent", expanded=True) as status:
             st.write(f"🎯 Analyzing {analyzed_ticker}...")
             st.write("🔧 Gathering financial metrics...")
@@ -503,6 +506,7 @@ Select a supported company from the dropdown or ask about one by name.
             health_json = calculate_health_score_tool(analyzed_ticker)
 
             st.write("📄 Extracting SEC filing risks...")
+            # same retrieval, but prompt will depend on quote_mode
             filing_risks = search_sec_filing_tool(
                 analyzed_ticker,
                 "risk factors threats concerns regulatory competition macroeconomic"
@@ -563,9 +567,41 @@ Select a supported company from the dropdown or ask about one by name.
             overall_risk = "Elevated"
             risk_emoji = "🔴"
 
-        # --- Use LLM to synthesize filing-based risks ---
+        # --- Choose LLM prompt depending on quote_mode ---
 
-        risk_prompt = f"""You are an equity risk analyst.
+        if quote_mode:
+            # SPECIAL MODE: user explicitly asked to quote 1–2 sentences
+            risk_prompt = f"""You are an equity analyst.
+
+The user asked:
+\"\"\"{query}\"\"\"
+
+
+Here are excerpts from the company's SEC filing (Risk Factors / MD&A / related sections):
+
+\"\"\"{filing_risks[:8000]}\"\"\"
+
+
+Your task:
+
+1. Find **1–2 sentences from the filing text that directly mention competition or competitive risks.**
+2. Copy those sentences **exactly** as they appear in the filing (no rewriting, no summarizing).
+3. Then explain those sentences in **very simple language** for someone with no finance background.
+
+Return **markdown** in exactly this structure:
+
+### Quoted sentences
+- "First sentence from the filing."
+- "Second sentence from the filing."  (omit if you only find one)
+
+### Simple explanation
+- A short paragraph (3–5 sentences) explaining what these risks mean in everyday terms.
+
+Do NOT add any other sections or commentary.
+"""
+        else:
+            # DEFAULT MODE: full narrative risk analysis using filing + numbers
+            risk_prompt = f"""You are an equity risk analyst.
 
 User question:
 \"\"\"{query}\"\"\"
@@ -595,7 +631,11 @@ Focus on clarity. Avoid repeating raw numbers; interpret them.
         llm_resp = self.llm.invoke(risk_prompt)
         narrative = llm_resp.content.strip()
 
-        # --- Build final markdown ---
+        # If we’re in quote mode, just return the quoted block (no extra wrapper)
+        if quote_mode:
+            return f"## 🟢 Competition Risk from SEC Filing for {analyzed_ticker}\n\n" + narrative
+
+        # --- Build full markdown (default mode) ---
 
         risk_table = f"""## {risk_emoji} Risk Assessment for {analyzed_ticker}
 
